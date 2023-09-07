@@ -4,10 +4,17 @@ pragma solidity ^0.8.13;
 
 
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
-
-contract Raffle{
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
+contract Raffle is VRFConsumerBaseV2{
 
 error Raffle__NotEnoughEthSent();
+error Raffle__TransferFailed();
+error Raffle__RaffleNotOpen();
+
+    enum RaffleState{
+        OPEN, 
+        CALCULATING
+    }
 
   uint16 private constant REQUEST_CONFIRMATIONS=3;
   uint32 private constant NUMS_WORDS=1;
@@ -22,12 +29,14 @@ error Raffle__NotEnoughEthSent();
     uint32 private immutable i_callbackGasLimit;
 
     uint256 private s_lastTimestamp;
+    address private s_recentWinner;
     address payable[] private s_players;
+    RaffleState private s_raffleState;
     
    event EnteredRaffle(address indexed player);
 
 
-    constructor (uint256 entranceFee,uint256 interval , address vrfCoordinator, bytes32 gaslane,uint64 subscriptionId , uint32 callbackGasLimit){
+    constructor (uint256 entranceFee,uint256 interval , address vrfCoordinator, bytes32 gaslane,uint64 subscriptionId , uint32 callbackGasLimit)VRFConsumerBaseV2(vrfCoordinator){
         i_interval = interval;
         i_entranceFee = entranceFee;
         i_vrfCoordinator= VRFCoordinatorV2Interface(vrfCoordinator);
@@ -35,10 +44,30 @@ error Raffle__NotEnoughEthSent();
         i_gaslane= gaslane;
         i_subscriptionId= subscriptionId;
         i_callbackGasLimit= callbackGasLimit;
+        s_raffleState=RaffleState.OPEN;
 
     }
 
+   function fulfillRandomWords(uint256 requestId, 
+   uint256[] memory randomWords) internal override {
+         uint256 indexedWinner= randomWords[0]%s_players.length;
+         address payable winner= s_players[indexedWinner];
+         s_recentWinner=winner;
+         s_raffleState= RaffleState.OPEN;
+         (bool success,) = s_recentWinner.call{value:address(this).balance}("");
+         if(!success){
+            revert Raffle__TransferFailed();
+         }
+
+   }
+
+
+
     function  enterRaffle() external payable {
+
+        if(s_raffleState != RaffleState.OPEN){
+            revert Raffle__RaffleNotOpen();
+        }
 
         if(msg.value<i_entranceFee){
             revert Raffle__NotEnoughEthSent(); 
@@ -56,6 +85,8 @@ error Raffle__NotEnoughEthSent();
         revert();
        
      }
+
+     s_raffleState= RaffleState.CALCULATING;
 
       uint256 requestId= i_vrfCoordinator.requestRandomWords(
             i_gaslane,
